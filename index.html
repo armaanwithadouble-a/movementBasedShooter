@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Unity-like First Person Game</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden;
+        }
+        canvas { 
+            display: block; 
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <!-- Remove Stats.js for now as it's causing issues -->
+    
+    <!-- Load Ammo.js from a direct source -->
+    <script>
+        // Load Ammo.js dynamically
+        const ammoScript = document.createElement('script');
+        ammoScript.src = 'https://raw.githubusercontent.com/kripken/ammo.js/master/builds/ammo.js';
+        ammoScript.async = true;
+        ammoScript.onerror = () => {
+            // Fallback to alternative CDN if first one fails
+            const fallbackScript = document.createElement('script');
+            fallbackScript.src = 'https://cdn.jsdelivr.net/gh/kripken/ammo.js@master/builds/ammo.js';
+            fallbackScript.async = true;
+            document.body.appendChild(fallbackScript);
+        };
+        document.body.appendChild(ammoScript);
+    </script>
+
+    <!-- Module loader -->
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    
+    <!-- Import map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <!-- Your game code -->
+    <script type="module" src="game.js"></script>
+</body>
+</html>

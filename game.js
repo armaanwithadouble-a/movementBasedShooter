@@ -24,6 +24,12 @@ const MAX_VELOCITY = 20.0;         // Maximum speed cap
 const MAX_JUMPS = 1;
 let canJump = false;
 
+// Add these with other global variables
+let weaponInventory = [];
+let currentWeapon = null;
+let gunMesh = null;
+let weaponAttachPoint;
+
 // Wait for Ammo.js to be ready
 window.addEventListener('load', () => {
     console.log("Page loaded, waiting for Ammo.js...");
@@ -164,6 +170,8 @@ function init() {
     // Camera setup
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
     controls = new PointerLockControls(camera, document.body);
+    
+    createWeaponAttachPoint();
 
     // Enhanced ambient lighting setup - increased intensity
     const ambientLight = new THREE.AmbientLight(0x6666ff, 0.8); // Increased from 0.4 to 0.8
@@ -280,6 +288,8 @@ function init() {
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     window.addEventListener('resize', onWindowResize);
+
+    createPodium();
 }
 
 function createPlayer() {
@@ -312,8 +322,8 @@ function onKeyDown(event) {
     switch(event.code) {
         case 'KeyW': moveDirection.forward = 1; break;
         case 'KeyS': moveDirection.backward = 1; break;
-        case 'KeyA': moveDirection.left = 1; break;
-        case 'KeyD': moveDirection.right = 1; break;
+        case 'KeyA': moveDirection.left = 1; break;  // This should make you move left
+        case 'KeyD': moveDirection.right = 1; break; // This should make you move right
         case 'Space': 
             if (!spacePressed) {
                 spacePressed = true;
@@ -327,8 +337,8 @@ function onKeyUp(event) {
     switch(event.code) {
         case 'KeyW': moveDirection.forward = 0; break;
         case 'KeyS': moveDirection.backward = 0; break;
-        case 'KeyA': moveDirection.left = 0; break;
-        case 'KeyD': moveDirection.right = 0; break;
+        case 'KeyA': moveDirection.left = 0; break;  // This should stop left movement
+        case 'KeyD': moveDirection.right = 0; break; // This should stop right movement
         case 'Space': spacePressed = false; break;
     }
 }
@@ -350,58 +360,50 @@ function updatePlayer() {
     
     camera.position.set(position.x(), position.y(), position.z());
 
-    let direction = new THREE.Vector3();
-    controls.getDirection(direction);
-    let rightDirection = new THREE.Vector3();
-    rightDirection.crossVectors(direction, new THREE.Vector3(0, 1, 0));
+    // Update weapon attach point position
+    if (weaponAttachPoint) {
+        const direction = new THREE.Vector3();
+        controls.getDirection(direction);
+        
+        // Get right vector for proper positioning
+        const rightVector = new THREE.Vector3();
+        rightVector.crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
+        
+        // Get up vector based on camera view
+        const upVector = new THREE.Vector3();
+        upVector.crossVectors(rightVector, direction).normalize();
+        
+        // Position attach point relative to camera view
+        weaponAttachPoint.position.set(
+            position.x(),
+            position.y(),
+            position.z()
+        ).add(
+            direction.multiplyScalar(0.5)  // Forward offset
+        ).add(
+            rightVector.multiplyScalar(0.4) // Right offset - increased from 0.3 to 0.4
+        ).add(
+            upVector.multiplyScalar(-0.2)   // Down offset using camera's up vector
+        );
+        
+        // Make attach point face the same direction as camera
+        weaponAttachPoint.quaternion.copy(camera.quaternion);
 
-    // Get current velocity
-    let velocity = playerBody.getLinearVelocity();
-    let currentVelocity = new THREE.Vector3(velocity.x(), velocity.y(), velocity.z());
-
-    // Calculate target velocity based on input
-    let targetVelocity = new THREE.Vector3();
-    
-    // Combine movement inputs
-    let moveX = moveDirection.right - moveDirection.left;
-    let moveZ = moveDirection.forward - moveDirection.backward;
-
-    // Normalize diagonal movement
-    if (moveX !== 0 && moveZ !== 0) {
-        // Moving diagonally
-        let normalizedMove = new THREE.Vector2(moveX, moveZ).normalize();
-        moveX = normalizedMove.x;
-        moveZ = normalizedMove.y;
+        // Update gun position to match attach point if we have one
+        if (gunMesh && weaponInventory.length > 0) {
+            // Position gun at the attach point
+            gunMesh.position.copy(weaponAttachPoint.position);
+            
+            // Copy the attach point's orientation
+            gunMesh.quaternion.copy(weaponAttachPoint.quaternion);
+            
+            // Rotate gun so barrel points forward relative to the attach point
+            gunMesh.rotateY(Math.PI / 2);
+        }
     }
 
-    // Apply normalized movement
-    if (moveZ !== 0) {
-        targetVelocity.add(direction.multiplyScalar(moveZ * PLAYER_SPEED));
-    }
-    if (moveX !== 0) {
-        targetVelocity.add(rightDirection.multiplyScalar(moveX * PLAYER_SPEED));
-    }
-
-    // Interpolate between current and target velocity
-    let factor = moveDirection.forward || moveDirection.backward || 
-                 moveDirection.left || moveDirection.right ? 
-                 ACCELERATION_FACTOR : DECELERATION_FACTOR;
-
-    let newVelocity = new THREE.Vector3(
-        lerp(currentVelocity.x, targetVelocity.x, factor),
-        velocity.y(), // Keep vertical velocity unchanged
-        lerp(currentVelocity.z, targetVelocity.z, factor)
-    );
-
-    // Apply speed cap
-    if (newVelocity.length() > MAX_VELOCITY) {
-        newVelocity.normalize().multiplyScalar(MAX_VELOCITY);
-    }
-
-    // Apply the new velocity
-    playerBody.setLinearVelocity(
-        new window.ammo.btVector3(newVelocity.x, velocity.y(), newVelocity.z)
-    );
+    // Add weapon pickup check
+    checkWeaponPickup();
 }
 
 function lerp(start, end, factor) {
@@ -421,8 +423,64 @@ function updatePhysics(deltaTime) {
     window.ammo.destroy(to);
     window.ammo.destroy(rayCallback);
     
+    // Apply movement forces to player
+    let moveX = moveDirection.left - moveDirection.right;
+    let moveZ = moveDirection.backward - moveDirection.forward;
+    
+    if (moveX !== 0 || moveZ !== 0) {
+        // Get current velocity
+        let velocity = playerBody.getLinearVelocity();
+        
+        // Get camera direction
+        let direction = new THREE.Vector3();
+        controls.getDirection(direction);
+        direction.y = 0; // Keep movement on XZ plane
+        direction.normalize();
+        
+        // Get right vector
+        let right = new THREE.Vector3();
+        right.crossVectors(new THREE.Vector3(0, 1, 0), direction);
+        
+        // Calculate target velocity based on input
+        let targetVelocity = new THREE.Vector3();
+        targetVelocity.add(direction.multiplyScalar(-moveZ * PLAYER_SPEED));
+        targetVelocity.add(right.multiplyScalar(moveX * PLAYER_SPEED));
+        
+        // Normalize diagonal movement
+        if (moveX !== 0 && moveZ !== 0) {
+            // If moving diagonally, normalize the vector to prevent faster diagonal movement
+            targetVelocity.normalize().multiplyScalar(PLAYER_SPEED);
+        }
+        
+        // Apply acceleration to current velocity
+        playerVelocity.x = lerp(velocity.x(), targetVelocity.x, ACCELERATION_FACTOR);
+        playerVelocity.z = lerp(velocity.z(), targetVelocity.z, ACCELERATION_FACTOR);
+        
+        // Limit maximum velocity
+        const currentSpeed = Math.sqrt(playerVelocity.x * playerVelocity.x + playerVelocity.z * playerVelocity.z);
+        if (currentSpeed > MAX_VELOCITY) {
+            const scaleFactor = MAX_VELOCITY / currentSpeed;
+            playerVelocity.x *= scaleFactor;
+            playerVelocity.z *= scaleFactor;
+        }
+        
+        // Set the new velocity
+        velocity.setX(playerVelocity.x);
+        velocity.setZ(playerVelocity.z);
+        playerBody.setLinearVelocity(velocity);
+    } else {
+        // Decelerate when no input
+        let velocity = playerBody.getLinearVelocity();
+        playerVelocity.x = lerp(velocity.x(), 0, DECELERATION_FACTOR);
+        playerVelocity.z = lerp(velocity.z(), 0, DECELERATION_FACTOR);
+        velocity.setX(playerVelocity.x);
+        velocity.setZ(playerVelocity.z);
+        playerBody.setLinearVelocity(velocity);
+    }
+    
     physicsWorld.stepSimulation(deltaTime, 10);
 
+    // Rest of the function remains the same
     for (let i = 0; i < rigidBodies.length; i++) {
         let objThree = rigidBodies[i].mesh;
         let objAmmo = rigidBodies[i].body;
@@ -492,4 +550,142 @@ function createRandomCube() {
     const body = createRigidBody(cube, mass, position, quat);
 
     return cube;
+}
+
+function createGunMesh() {
+    const gunGroup = new THREE.Group();
+
+    // Gun body - positioned above the origin (which will be at the handle)
+    const bodyGeometry = new THREE.BoxGeometry(0.25, 0.15, 0.1);
+    const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
+    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    body.position.y = 0.2;  // Move body up from origin
+    
+    // Gun barrel - positioned at the front of the body
+    const barrelGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.4, 8);
+    const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+    const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+    barrel.position.set(0.25, 0.2, 0); // Position at right side of body, same height as body
+    barrel.rotation.z = Math.PI / 2;  // Rotate to point along X axis
+    
+    // Gun handle - centered at origin (0,0,0)
+    const handleGeometry = new THREE.BoxGeometry(0.08, 0.25, 0.1);
+    const handleMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+    const handle = new THREE.Mesh(handleGeometry, handleMaterial);
+    // Handle is at origin, so no position adjustment needed
+    
+    // Add parts to group
+    gunGroup.add(body);
+    gunGroup.add(barrel);
+    gunGroup.add(handle);
+
+    return gunGroup;
+}
+
+function createPodium() {
+    // Create podium
+    const podiumGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const podiumMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x808080,
+        metalness: 0.5,
+        roughness: 0.5
+    });
+    const podium = new THREE.Mesh(podiumGeometry, podiumMaterial);
+    podium.position.set(15, 0.5, 15); // Moved further from center
+    podium.receiveShadow = true;
+    podium.castShadow = true;
+    scene.add(podium);
+
+    // Add physics to podium
+    const podiumPos = new THREE.Vector3(15, 0.5, 15);
+    const podiumQuat = new THREE.Quaternion(0, 0, 0, 1);
+    createRigidBody(podium, 0, podiumPos, podiumQuat); // Mass of 0 makes it static
+
+    // Create gun and place it on podium
+    gunMesh = createGunMesh();
+    gunMesh.position.set(15, 1.5, 15); // Match podium's new position
+    gunMesh.scale.set(1, 1, 1);
+    // Rotate gun on podium to display it nicely
+    gunMesh.rotation.y = Math.PI / 4; // Rotate 45 degrees for better visibility
+    gunMesh.userData.isWeapon = true;
+    gunMesh.userData.weaponType = 'Pistol';
+    scene.add(gunMesh);
+
+    // Create weapon label
+    createWeaponLabel();
+}
+
+function createWeaponLabel() {
+    const labelDiv = document.createElement('div');
+    labelDiv.id = 'weaponLabel';
+    labelDiv.style.position = 'fixed';
+    labelDiv.style.bottom = '20px';
+    labelDiv.style.right = '20px';
+    labelDiv.style.padding = '10px';
+    labelDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    labelDiv.style.color = 'white';
+    labelDiv.style.fontFamily = 'Arial, sans-serif';
+    labelDiv.style.fontSize = '20px';
+    labelDiv.style.userSelect = 'none';
+    document.body.appendChild(labelDiv);
+    updateWeaponLabel();
+}
+
+function updateWeaponLabel() {
+    const label = document.getElementById('weaponLabel');
+    if (label) {
+        label.textContent = currentWeapon || 'No Weapon';
+    }
+}
+
+function checkWeaponPickup() {
+    if (!gunMesh) return;
+    
+    const playerPos = new THREE.Vector3(
+        playerBody.getWorldTransform().getOrigin().x(),
+        playerBody.getWorldTransform().getOrigin().y(),
+        playerBody.getWorldTransform().getOrigin().z()
+    );
+    
+    const distance = playerPos.distanceTo(gunMesh.position);
+    
+    if (distance < 1.5 && !weaponInventory.includes(gunMesh.userData.weaponType)) {
+        console.log("Weapon picked up!");
+        weaponInventory.push(gunMesh.userData.weaponType);
+        currentWeapon = gunMesh.userData.weaponType;
+        
+        // Remove gun from podium
+        scene.remove(gunMesh);
+        
+        // Create new gun model attached to player
+        const playerGun = createGunMesh();
+        playerGun.scale.set(0.8, 0.8, 0.8);  // Slightly reduced overall scale
+        scene.add(playerGun);
+        
+        // Important: Transfer the weapon data to the new gun mesh
+        playerGun.userData = gunMesh.userData;
+        gunMesh = playerGun;
+
+        // Update the weapon label
+        updateWeaponLabel();
+    }
+}
+
+function createWeaponAttachPoint() {
+    const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+    const material = new THREE.MeshBasicMaterial({
+        color: 0xff0000,
+        transparent: true,
+        opacity: 0.7
+    });
+    weaponAttachPoint = new THREE.Mesh(geometry, material);
+    
+    // Make it visible but non-collidable
+    weaponAttachPoint.visible = true;  // Make it visible again
+    weaponAttachPoint.userData.noCollision = true;
+    
+    // Don't add it to the physics world
+    scene.add(weaponAttachPoint);
+    
+    console.log("Weapon attach point created:", weaponAttachPoint);
 }

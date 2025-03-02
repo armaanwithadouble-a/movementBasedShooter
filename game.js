@@ -8,18 +8,21 @@ let moveDirection = { left: 0, right: 0, forward: 0, backward: 0 };
 let camera, scene, renderer, controls;
 let tmpTrans;
 let playerVelocity = new THREE.Vector3();
+let spacePressed = false;
 
 // Physics & player constants
 const PLAYER_MASS = 1;
 const PLAYER_HEIGHT = 2;
 const PLAYER_RADIUS = 0.5;
 const PLAYER_SPEED = 10.0;
-const JUMP_FORCE = 5;
+const JUMP_FORCE = 7;
 const MAX_SLOPE_ANGLE = 45;
 const STEP_HEIGHT = 0.5;
 const ACCELERATION_FACTOR = 0.15;  // Lower = more gradual, Higher = more responsive
 const DECELERATION_FACTOR = 0.1;   // Lower = more sliding, Higher = quicker stop
 const MAX_VELOCITY = 20.0;         // Maximum speed cap
+const MAX_JUMPS = 1;
+let canJump = false;
 
 // Wait for Ammo.js to be ready
 window.addEventListener('load', () => {
@@ -159,7 +162,7 @@ function init() {
     scene.add(skybox);
 
     // Camera setup
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
     controls = new PointerLockControls(camera, document.body);
 
     // Enhanced ambient lighting setup - increased intensity
@@ -294,10 +297,13 @@ function createPlayer() {
     );
     playerBody = new window.ammo.btRigidBody(rbInfo);
     
-    playerBody.setAngularFactor(new window.ammo.btVector3(0, 1, 0));
+    // Completely disable rotation on all axes
+    playerBody.setAngularFactor(new window.ammo.btVector3(0, 0, 0));
+    
     playerBody.setFriction(0.5);
     playerBody.setRestitution(0);
     playerBody.setActivationState(4);
+    playerBody.setCollisionFlags(0);
 
     physicsWorld.addRigidBody(playerBody);
 }
@@ -308,7 +314,12 @@ function onKeyDown(event) {
         case 'KeyS': moveDirection.backward = 1; break;
         case 'KeyA': moveDirection.left = 1; break;
         case 'KeyD': moveDirection.right = 1; break;
-        case 'Space': jump(); break;
+        case 'Space': 
+            if (!spacePressed) {
+                spacePressed = true;
+                jump();
+            }
+            break;
     }
 }
 
@@ -318,13 +329,17 @@ function onKeyUp(event) {
         case 'KeyS': moveDirection.backward = 0; break;
         case 'KeyA': moveDirection.left = 0; break;
         case 'KeyD': moveDirection.right = 0; break;
+        case 'Space': spacePressed = false; break;
     }
 }
 
 function jump() {
+    if (!canJump) return; // Only jump if we can
+    
     let velocity = playerBody.getLinearVelocity();
     velocity.setY(JUMP_FORCE);
     playerBody.setLinearVelocity(velocity);
+    canJump = false; // Prevent jumping again until we hit the ground
 }
 
 function updatePlayer() {
@@ -394,6 +409,18 @@ function lerp(start, end, factor) {
 }
 
 function updatePhysics(deltaTime) {
+    // Check for ground contact before physics step
+    let from = playerBody.getWorldTransform().getOrigin();
+    let to = new window.ammo.btVector3(from.x(), from.y() - (PLAYER_HEIGHT/2 + 0.1), from.z());
+    
+    let rayCallback = new window.ammo.ClosestRayResultCallback(from, to);
+    physicsWorld.rayTest(from, to, rayCallback);
+    
+    canJump = rayCallback.hasHit();
+    
+    window.ammo.destroy(to);
+    window.ammo.destroy(rayCallback);
+    
     physicsWorld.stepSimulation(deltaTime, 10);
 
     for (let i = 0; i < rigidBodies.length; i++) {

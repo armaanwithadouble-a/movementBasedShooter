@@ -608,7 +608,7 @@ function createPodium() {
     // Rotate gun on podium to display it nicely
     gunMesh.rotation.y = Math.PI / 4; // Rotate 45 degrees for better visibility
     gunMesh.userData.isWeapon = true;
-    gunMesh.userData.weaponType = 'Pistol';
+    gunMesh.userData.weaponType = 'wip pistol (does nothing)';
     scene.add(gunMesh);
 
     // Create weapon label
